@@ -1,9 +1,15 @@
 ﻿using CommonControls.FileTypes.Animation;
+using CommonControls.FileTypes.MetaData.Definitions;
+using CommonControls.FileTypes.PackFiles.Models;
 using CommonControls.FileTypes.RigidModel.Transforms;
+using CommonControls.Services;
+using Filetypes.ByteParsing;
 using Microsoft.Xna.Framework;
+using SharpDX.DXGI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using static CommonControls.FileTypes.Animation.AnimationFile;
 
 
@@ -45,7 +51,7 @@ namespace View3D.Animation
         private long _playTimeUs = -1 * MicrosecondsPerSecond;
 
         public List<KeyFrame> DynamicFrames = new List<KeyFrame>();
-
+        
         public long PlayTimeUs => _playTimeUs;
 
         public long MicrosecondsPerFrame
@@ -62,7 +68,7 @@ namespace View3D.Animation
 
         public float PlayTimeInSec
         {
-            get => (float)_playTimeUs / MicrosecondsPerSecond;
+            get => (float) _playTimeUs / MicrosecondsPerSecond;
             set
             {
                 if (DynamicFrames.Count == 0)
@@ -72,14 +78,14 @@ namespace View3D.Animation
                 }
 
                 // make sure we have whole number of microsecond per frame
-                long framePlayTimeUs = (long)Math.Ceiling(value / DynamicFrames.Count * MicrosecondsPerSecond);
+                long framePlayTimeUs = (long) Math.Ceiling(value / DynamicFrames.Count * MicrosecondsPerSecond);
                 _playTimeUs = framePlayTimeUs * DynamicFrames.Count;
             }
         }
 
         public int AnimationBoneCount
         {
-            get
+            get 
             {
                 var dynamicBones = 0;
                 if (DynamicFrames.Count != 0)
@@ -152,6 +158,41 @@ namespace View3D.Animation
 
         public AnimationFile ConvertToFileFormat(GameSkeleton skeleton)
         {
+
+            var output = new AnimationFile();
+            
+            var fRate = (DynamicFrames.Count() - 1) / PlayTimeInSec;
+            output.Header.FrameRate = (float)Math.Round(fRate);
+            if (output.Header.FrameRate <= 0)
+                output.Header.FrameRate = 20;
+
+            output.Header.Version = 7;
+            output.Header.AnimationTotalPlayTimeInSec = PlayTimeInSec;
+            output.Header.SkeletonName = skeleton.SkeletonName;
+            output.AnimationParts.Add(new AnimationPart());
+
+            output.Bones = new BoneInfo[skeleton.BoneCount];
+            for (int i = 0; i < skeleton.BoneCount; i++)
+            {
+                output.Bones[i] = new BoneInfo()
+                {
+                    Id = i,
+                    Name = skeleton.BoneNames[i],
+                    ParentId = skeleton.GetParentBoneIndex(i)
+                };
+                    output.AnimationParts[0].RotationMappings.Add(new AnimationBoneMapping(i));
+                    output.AnimationParts[0].TranslationMappings.Add(new AnimationBoneMapping(i));
+            }
+        
+
+            for(int i = 0; i < DynamicFrames.Count; i++)
+                output.AnimationParts[0].DynamicFrames.Add(CreateFrameFromKeyFrame(i, skeleton));
+
+            return output; 
+        }
+        public AnimationFile ConvertToFileFormatMount(GameSkeleton skeleton, PackFile file)
+        {
+            var riderAnimFile = AnimationFile.Create(file.DataSource.ReadDataAsChunk());
             var output = new AnimationFile();
 
             var fRate = (DynamicFrames.Count() - 1) / PlayTimeInSec;
@@ -173,14 +214,14 @@ namespace View3D.Animation
                     Name = skeleton.BoneNames[i],
                     ParentId = skeleton.GetParentBoneIndex(i)
                 };
+                output.AnimationParts[0].TranslationMappings.Add(riderAnimFile.AnimationParts[0].TranslationMappings[i]) ;
+                output.AnimationParts[0].RotationMappings.Add(riderAnimFile.AnimationParts[0].RotationMappings[i]);
 
-                output.AnimationParts[0].RotationMappings.Add(new AnimationBoneMapping(i));
-                output.AnimationParts[0].TranslationMappings.Add(new AnimationBoneMapping(i));
             }
 
 
             for (int i = 0; i < DynamicFrames.Count; i++)
-                output.AnimationParts[0].DynamicFrames.Add(CreateFrameFromKeyFrame(i, skeleton));
+                output.AnimationParts[0].DynamicFrames.Add(CreateFrameFromKeyFrameMount(i, skeleton, riderAnimFile.AnimationParts[0]));
 
             return output;
         }
@@ -195,10 +236,39 @@ namespace View3D.Animation
                 var scale = GetAccumulatedBoneScale(boneIndex, frameIndex, skeleton);
                 var transform = frame.Position[boneIndex] * scale;
                 output.Transforms.Add(new RmvVector3(transform));
-
+            }
+            for (int boneIndex = 0; boneIndex < frame.Rotation.Count(); boneIndex++)
+            {
                 var rot = frame.Rotation[boneIndex];
                 output.Quaternion.Add(new RmvVector4(rot.X, rot.Y, rot.Z, rot.W));
             }
+            
+
+            return output;
+        }
+        private Frame CreateFrameFromKeyFrameMount(int frameIndex, GameSkeleton skeleton, AnimationPart riderAnimPart)
+        {
+            KeyFrame frame = DynamicFrames[frameIndex];
+            var output = new Frame();
+
+            for (int boneIndex = 0; boneIndex < frame.Position.Count(); boneIndex++)
+            {
+                if (riderAnimPart.TranslationMappings[boneIndex].FileWriteValue != -1)
+                {
+                    var scale = GetAccumulatedBoneScale(boneIndex, frameIndex, skeleton);
+                    var transform = frame.Position[boneIndex] * scale;
+                    output.Transforms.Add(new RmvVector3(transform));
+                }
+            }
+            for (int boneIndex = 0; boneIndex < frame.Rotation.Count(); boneIndex++)
+            {
+                if (riderAnimPart.RotationMappings[boneIndex].FileWriteValue != -1)
+                {
+                    var rot = frame.Rotation[boneIndex];
+                    output.Quaternion.Add(new RmvVector4(rot.X, rot.Y, rot.Z, rot.W));
+                }
+            }
+
 
             return output;
         }
@@ -218,7 +288,7 @@ namespace View3D.Animation
             foreach (var item in DynamicFrames)
                 copy.DynamicFrames.Add(item.Clone());
             copy.PlayTimeInSec = PlayTimeInSec;
-
+            
             return copy;
         }
 
