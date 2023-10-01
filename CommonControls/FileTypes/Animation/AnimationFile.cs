@@ -1,27 +1,20 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
-// The .NET Foundation licenses this file to you under the MIT license.
-// See the LICENSE file in the project root for more information.
-
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using CommonControls.Common;
+﻿using CommonControls.Common;
 using CommonControls.FileTypes.PackFiles.Models;
 using CommonControls.FileTypes.RigidModel.Transforms;
 using CommonControls.Services;
 using Filetypes.ByteParsing;
 using Serilog;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
 
 namespace CommonControls.FileTypes.Animation
 {
     [DebuggerDisplay("AnimationFile - {Header.SkeletonName}[{DynamicFrames.Count}]")]
     public class AnimationFile
     {
-        public const int InvalidBoneIndex = -1;
-        public const int BoneIndexNoParent = InvalidBoneIndex;
-
         #region Sub classes
         public class BoneInfo
         {
@@ -92,7 +85,13 @@ namespace CommonControls.FileTypes.Animation
                 }
             }
 
-            public int FileWriteValue { get { return _value; } }
+            public int FileWriteValue 
+            { 
+                get
+                {
+                        return _value;
+                } 
+            }
 
             public override string ToString()
             {
@@ -176,14 +175,6 @@ namespace CommonControls.FileTypes.Animation
             return header;
         }
 
-        public int GetIdFromBoneName(string name)
-        {
-            var boneInfo = Bones
-                .Where(x => string.Compare(x.Name, name, StringComparison.InvariantCultureIgnoreCase) == 0)
-                .FirstOrDefault();
-                            
-            return (boneInfo == null) ? -1 : boneInfo.Id;
-        }
 
         public static AnimationFile Create(PackFile file)
         {
@@ -219,10 +210,8 @@ namespace CommonControls.FileTypes.Animation
                 output.Header.UnkownValue_v8 = chunk.ReadUInt32();
                 output.AnimationParts = LoadAnimationParts_v8(chunk, boneCount);
             }
-            else
-            {
+            else 
                 output.AnimationParts = LoadAnimationParts_Default(chunk, boneCount, output.Header.Version);
-            }
 
             if (chunk.BytesLeft != 0)
                 throw new Exception($"{chunk.BytesLeft} bytes left in animation");
@@ -231,10 +220,12 @@ namespace CommonControls.FileTypes.Animation
         }
 
 
+
         static List<AnimationPart> LoadAnimationParts_Default(ByteChunk chunk, uint boneCount, uint animationVersion)
         {
             var animPart = new AnimationPart();
-
+            int MappedBonePosCount = 0;
+            int MappedBoneRotCount = 0;
             for (int i = 0; i < boneCount; i++)
             {
                 int mappingValue = chunk.ReadInt32();
@@ -245,6 +236,7 @@ namespace CommonControls.FileTypes.Animation
             {
                 int mappingValue = chunk.ReadInt32();
                 animPart.RotationMappings.Add(new AnimationBoneMapping(mappingValue));
+
             }
 
             // A single static frame - Can be inverse, a pose or empty. Not sure? Hand animations are stored here
@@ -454,11 +446,22 @@ namespace CommonControls.FileTypes.Animation
             foreach (var animationPart in input.AnimationParts)
             {
                 // Body - remapping
+                int MappedTranslationCount = 0;
+                int MappedRotationCount = 0;
                 for (int i = 0; i < animationPart.TranslationMappings.Count; i++)
-                    writer.Write(animationPart.TranslationMappings[i].FileWriteValue);
+                {
+                    writer.Write((int)animationPart.TranslationMappings[i].FileWriteValue);
+                    if((int)animationPart.TranslationMappings[i].FileWriteValue == -1)
+                        MappedTranslationCount++;
+                }
 
-                for (int i = 0; i < animationPart.TranslationMappings.Count; i++)
-                    writer.Write(animationPart.RotationMappings[i].FileWriteValue);
+                for (int i = 0; i < animationPart.RotationMappings.Count; i++)
+                {
+                    writer.Write((int)animationPart.RotationMappings[i].FileWriteValue);
+                    if ((int)animationPart.RotationMappings[i].FileWriteValue == -1)
+                        MappedRotationCount++;
+                }
+
 
                 // Static frame
                 if (input.Header.Version == 7)
@@ -467,7 +470,7 @@ namespace CommonControls.FileTypes.Animation
                     {
                         writer.Write((uint)animationPart.StaticFrame.Transforms.Count());   //staticPosCount
                         writer.Write((uint)animationPart.StaticFrame.Quaternion.Count());   //staticRotCount
-                        WriteFrame(writer, animationPart.StaticFrame);
+                            WriteFrame(writer, animationPart.StaticFrame, animationPart);
                     }
                     else
                     {
@@ -479,11 +482,11 @@ namespace CommonControls.FileTypes.Animation
                 // Dyamic frame
                 if (animationPart.DynamicFrames.Any())
                 {
-                    writer.Write(animationPart.DynamicFrames.First().Transforms.Count());   // animPosCount
-                    writer.Write(animationPart.DynamicFrames.First().Quaternion.Count());   // animRotCount
+                    writer.Write(animationPart.DynamicFrames.First().Transforms.Count()-MappedTranslationCount);   // animPosCount
+                    writer.Write(animationPart.DynamicFrames.First().Quaternion.Count()-MappedRotationCount);   // animRotCount
                     writer.Write(animationPart.DynamicFrames.Count());                      // Frame count
                     for (int i = 0; i < animationPart.DynamicFrames.Count(); i++)
-                        WriteFrame(writer, animationPart.DynamicFrames[i]);
+                             WriteFrame(writer, animationPart.DynamicFrames[i], animationPart);
                 }
                 else
                 {
@@ -499,27 +502,36 @@ namespace CommonControls.FileTypes.Animation
         public static byte[] ConvertToBytes(AnimationFile input)
         {
             var bytes = ConvertToBytesInvernal(input);
-            var tempResult = Create(new ByteChunk(bytes));  // Throws excetion and stop the save if the animation is corrupt for some reason
+            //var tempResult = Create(new ByteChunk(bytes));  // Throws excetion and stop the save if the animation is corrupt for some reason
 
             return bytes;
         }
 
 
-        static void WriteFrame(BinaryWriter writer, Frame frame)
+        static void WriteFrame(BinaryWriter writer, Frame frame, AnimationPart animationPart)
         {
             for (int i = 0; i < frame.Transforms.Count(); i++)
             {
-                writer.Write(frame.Transforms[i].X);
-                writer.Write(frame.Transforms[i].Y);
-                writer.Write(frame.Transforms[i].Z);
+                if (animationPart.TranslationMappings[i].FileWriteValue != -1)
+                {
+                    writer.Write(frame.Transforms[i].X);
+                    writer.Write(frame.Transforms[i].Y);
+                    writer.Write(frame.Transforms[i].Z);
+                }
+
             }
 
             for (int i = 0; i < frame.Quaternion.Count(); i++)
             {
-                writer.Write((short)(frame.Quaternion[i].X * short.MaxValue));
-                writer.Write((short)(frame.Quaternion[i].Y * short.MaxValue));
-                writer.Write((short)(frame.Quaternion[i].Z * short.MaxValue));
-                writer.Write((short)(frame.Quaternion[i].W * short.MaxValue));
+                if (animationPart.RotationMappings[i].FileWriteValue != -1)
+                {
+                    writer.Write((short)(frame.Quaternion[i].X * short.MaxValue));
+                    writer.Write((short)(frame.Quaternion[i].Y * short.MaxValue));
+                    writer.Write((short)(frame.Quaternion[i].Z * short.MaxValue));
+                    writer.Write((short)(frame.Quaternion[i].W * short.MaxValue));
+                }
+ 
+
             }
         }
 
@@ -586,18 +598,6 @@ namespace CommonControls.FileTypes.Animation
                     newDynamicFrames.Add(newKeyframe);
                 }
 
-                // Update data
-                var newRotMapping = new List<AnimationBoneMapping>();
-                var newTransMappings = new List<AnimationBoneMapping>();
-
-                for (int i = 0; i < boneCount; i++)
-                {
-                    newRotMapping.Add(new AnimationBoneMapping(i));
-                    newTransMappings.Add(new AnimationBoneMapping(i));
-                }
-
-                aninmationPart.TranslationMappings = newTransMappings;
-                aninmationPart.RotationMappings = newRotMapping;
                 aninmationPart.DynamicFrames = newDynamicFrames;
                 aninmationPart.StaticFrame = null;
             }

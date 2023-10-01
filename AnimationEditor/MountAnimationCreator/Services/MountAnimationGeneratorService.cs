@@ -23,7 +23,7 @@ namespace AnimationEditor.MountAnimationCreator.Services
         GameSkeleton _mountSkeleton;
 
         MeshAnimationHelper _mountVertexPositionResolver;
-        public MountAnimationGeneratorService(AnimationSettingsViewModel animationSettings, Rmv2MeshNode mountMesh, int mountVertexId, int riderBoneIndex, SceneObject rider, SceneObject mount)
+        public MountAnimationGeneratorService(AnimationSettingsViewModel animationSettings, Rmv2MeshNode mountMesh, int mountVertexId, int riderBoneIndex, AssetViewModel rider, AssetViewModel mount)
         {
             _animationSettings = animationSettings;
             _mountVertexId = mountVertexId;
@@ -31,6 +31,7 @@ namespace AnimationEditor.MountAnimationCreator.Services
             _riderBoneIndex = riderBoneIndex;
             _riderSkeleton = rider.Skeleton;
             _mountSkeleton = mount.Skeleton;
+
 
             float mountScale = (float)_animationSettings.Scale.Value;
             mount.SetTransform(Matrix.CreateScale(mountScale));
@@ -50,7 +51,6 @@ namespace AnimationEditor.MountAnimationCreator.Services
             // Resample
             if (_animationSettings.FitAnimation)
                 newRiderAnim = View3D.Animation.AnimationEditor.ReSample(_riderSkeleton, newRiderAnim, mountAnimation.DynamicFrames.Count, mountAnimation.PlayTimeInSec);
-
             var maxFrameCount = Math.Min(mountAnimation.DynamicFrames.Count, newRiderAnim.DynamicFrames.Count);
             for (int i = 0; i < maxFrameCount; i++)
             {
@@ -83,10 +83,6 @@ namespace AnimationEditor.MountAnimationCreator.Services
 
                 var riderPositionDiff = newRiderPosition - originalPosition;
                 var riderRotationDiff = newRiderRotation * Quaternion.Inverse(originalRotation);
-
-                newRiderAnim.DynamicFrames[i].Position[_riderBoneIndex] = newRiderPosition;
-                newRiderAnim.DynamicFrames[i].Rotation[_riderBoneIndex] = newRiderRotation;
-
                 // Process attachment/prop points
                 List<int> propBones = new List<int>();
                 if (_animationSettings.IsRootNodeAnimation)
@@ -104,12 +100,28 @@ namespace AnimationEditor.MountAnimationCreator.Services
                 {
                     if (propBoneId == _riderBoneIndex)
                         continue;
-                    newRiderAnim.DynamicFrames[i].Position[propBoneId] += riderPositionDiff;
+                    var riderFrame = AnimationSampler.Sample(i, 0, _riderSkeleton, newRiderAnim);
+                    var riderBoneWorldmatrix = riderFrame.GetSkeletonAnimatedWorld(_riderSkeleton, _riderBoneIndex);
+                    riderBoneWorldmatrix.Decompose(out var _, out origianlRotation, out var origianlPosition);
+                    var rotatedpoint = RotateAround(newRiderAnim.DynamicFrames[i].Position[propBoneId], origianlPosition, riderRotationDiff);
+                    newRiderAnim.DynamicFrames[i].Position[propBoneId] = rotatedpoint + riderPositionDiff;
                     newRiderAnim.DynamicFrames[i].Rotation[propBoneId] = riderRotationDiff * newRiderAnim.DynamicFrames[i].Rotation[propBoneId];
                 }
+                newRiderAnim.DynamicFrames[i].Position[_riderBoneIndex] = newRiderPosition;
+                newRiderAnim.DynamicFrames[i].Rotation[_riderBoneIndex] = newRiderRotation;
+
+
             }
 
             return newRiderAnim;
+        }
+
+
+        static Vector3 RotateAround(Vector3 pos, Vector3 pivotPoint, Quaternion rot)
+        {
+            pos = pivotPoint + Vector3.Transform(pos-pivotPoint, rot); 
+            return pos;
+
         }
 
 
